@@ -1,6 +1,6 @@
-# task2/sql_builder.py (修改版 - 添加获取SQL的方法)
+# task2/sql_builder.py (修复版 - 去重和正确排序)
 """
-SQL构建器
+SQL构建器 - 修复数据重复问题
 """
 import sys
 from pathlib import Path
@@ -11,7 +11,7 @@ from task2.db_utils import Database
 class SQLBuilder:
     def __init__(self, db):
         self.db = db
-        self.last_sql = None  # 存储最后生成的SQL
+        self.last_sql = None
     
     def build_query(self, parsed):
         """构建SQL查询语句"""
@@ -24,27 +24,40 @@ class SQLBuilder:
         table = parsed['table']
         time_cond = parsed.get('time')
         
-        # 基础SELECT
-        sql = f"SELECT [report_period], [{field}] FROM {table} WHERE [stock_abbr] = '{company}'"
+        # 基础SELECT - 使用DISTINCT去重
+        sql = f"SELECT DISTINCT [report_period], [report_year], [{field}] FROM {table} WHERE [stock_abbr] = '{company}'"
         
         # 时间条件
         if time_cond:
             if time_cond == 'recent_years':
-                sql += " AND [report_period] LIKE '%FY' ORDER BY [report_year] DESC"
-                # 使用TOP限制（SQL Server语法）
-                sql = sql.replace("SELECT", "SELECT TOP 3")
+                # 获取最近3年的年度数据
+                sql += " AND [report_period] LIKE '%FY'"
+                sql += " ORDER BY [report_year] DESC"
+                sql = f"SELECT TOP 3 [report_period], [report_year], [{field}] FROM ({sql}) AS t"
             elif time_cond.startswith('last_') and time_cond.endswith('_years'):
                 n = int(time_cond.split('_')[1])
-                sql += f" AND [report_period] LIKE '%FY' ORDER BY [report_year] DESC"
-                sql = sql.replace("SELECT", f"SELECT TOP {n}")
-            elif 'Q' in time_cond or 'FY' in time_cond:
+                sql += f" AND [report_period] LIKE '%FY'"
+                sql += f" ORDER BY [report_year] DESC"
+                sql = f"SELECT TOP {n} [report_period], [report_year], [{field}] FROM ({sql}) AS t"
+            elif 'Q' in time_cond:
+                # 季度数据
+                sql += f" AND [report_period] = '{time_cond}'"
+                sql += " ORDER BY [report_year] DESC"
+            elif 'FY' in time_cond:
+                # 年度数据
                 sql += f" AND [report_period] = '{time_cond}'"
             else:
+                # 年份模糊匹配
                 sql += f" AND [report_period] LIKE '{time_cond}%'"
+                sql += " ORDER BY [report_year] DESC, [report_period] DESC"
         else:
             # 无时间，默认取最新一条
             sql += " ORDER BY [report_year] DESC, [report_period] DESC"
-            sql = sql.replace("SELECT", "SELECT TOP 1")
+            sql = f"SELECT TOP 1 [report_period], [report_year], [{field}] FROM ({sql}) AS t"
+        
+        # 确保按照年份排序
+        if 'ORDER BY' not in sql and 'TOP' not in sql:
+            sql += " ORDER BY [report_year] ASC, [report_period] ASC"
         
         self.last_sql = sql
         return sql
